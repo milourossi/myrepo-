@@ -1,0 +1,117 @@
+---
+title: "Kandidatuppsats"
+format: pdf
+editor: visual
+---
+
+## Kandidatuppsats
+
+```{r}
+# Skapa en mapp för att packa upp
+outdir <- "ADNIMERGE2_unpacked"
+dir.create(outdir, showWarnings = FALSE)
+
+# Packa upp tar.gz-filen
+untar("ADNIMERGE2.tar.gz", exdir = outdir)
+
+# Plasma-biomarkörer
+load(file.path(outdir, "ADNIMERGE2/data/UPENN_PLASMA_FUJIREBIO_QUANTERIX.rda"))
+plasma_data <- UPENN_PLASMA_FUJIREBIO_QUANTERIX
+
+# Amyloid-PET
+load(file.path(outdir, "ADNIMERGE2/data/UCBERKELEY_AMY_6MM.rda"))
+amyloid_data <- UCBERKELEY_AMY_6MM
+
+# Diagnos
+load(file.path(outdir, "ADNIMERGE2/data/DXSUM.rda"))
+diagnosis_data <- DXSUM
+```
+
+```{r}
+# Antal rader i plasma-data
+cat("Plasma-data rader:", nrow(plasma_data), "\n")
+
+# Antal rader i amyloid-PET-data
+cat("Amyloid-PET-data rader:", nrow(amyloid_data), "\n")
+
+# Antal rader i diagnos-data
+cat("Diagnos-data rader:", nrow(diagnosis_data), "\n")
+```
+
+```{r}
+cat("Plasma-data unika RID:", length(unique(plasma_data$RID)), "\n")
+cat("Amyloid-PET-data unika RID:", length(unique(amyloid_data$RID)), "\n")
+cat("Diagnos-data unika RID:", length(unique(diagnosis_data$RID)), "\n")
+```
+
+```{r}
+library(dplyr)
+
+# Filtrera baseline i varje dataset
+plasma_bl <- plasma_data %>% filter(VISCODE %in% c("bl", "4_bl"))
+amyloid_bl <- amyloid_data %>% filter(VISCODE %in% c("bl", "4_bl"))
+diagnosis_bl <- diagnosis_data %>% filter(VISCODE %in% c("bl", "4_bl"))
+
+# Merge datasets successivt (inner join för gemensamma rader)
+merged <- plasma_bl %>%
+  inner_join(amyloid_bl, by = c("RID", "VISCODE")) %>%
+  inner_join(diagnosis_bl, by = c("RID", "VISCODE"))
+
+# Skapa amyloid_status om SUVR finns
+if("COMPOSITE_REF_SUVR" %in% colnames(merged)){
+  merged <- merged %>%
+    mutate(amyloid_status = ifelse(COMPOSITE_REF_SUVR > 1.1, "A+", "A-"))
+} else if("SUMMARY_SUVR" %in% colnames(merged)){
+  merged <- merged %>%
+    mutate(amyloid_status = ifelse(SUMMARY_SUVR > 1.1, "A+", "A-"))
+} else {
+  warning("Ingen amyloid-SUVR-kolumn hittades för att skapa amyloid_status.")
+  merged$amyloid_status <- NA
+}
+
+# Skapa diagnosis
+if("DX" %in% colnames(merged)){
+  merged <- merged %>%
+    mutate(diagnosis = case_when(
+      DX == "CN" ~ "CN",
+      DX == "MCI" ~ "MCI",
+      DX == "AD" ~ "AD",
+      TRUE ~ NA_character_
+    ))
+} else if("DIAGNOSIS" %in% colnames(merged)){
+  merged <- merged %>%
+    mutate(diagnosis = case_when(
+      DIAGNOSIS == "CN" ~ "CN",
+      DIAGNOSIS == "MCI" ~ "MCI",
+      DIAGNOSIS == "AD" ~ "AD",
+      TRUE ~ NA_character_
+    ))
+} else {
+  warning("Ingen diagnos-kolumn hittades.")
+  merged$diagnosis <- NA
+}
+
+# Kontrollera resultat
+cat("Antal rader i merged dataset:", nrow(merged), "\n")
+cat("Antal unika deltagare:", length(unique(merged$RID)), "\n")
+table(merged$amyloid_status, useNA = "ifany")
+table(merged$diagnosis, useNA = "ifany")
+```
+
+```{r}
+library(dplyr)
+
+# Identifiera kolumner som är plasma-biomarkörer
+plasma_cols <- colnames(merged)[grepl("pT|Aβ|NfL|GFAP", colnames(merged))]
+
+# Räkna antal rader med både diagnos, amyloid och minst en plasma-biomarkör
+n_complete <- merged %>%
+  filter(
+    !is.na(amyloid_status),
+    !is.na(diagnosis),
+    rowSums(!is.na(select(., all_of(plasma_cols)))) > 0
+  ) %>%
+  nrow()
+
+n_complete
+```
