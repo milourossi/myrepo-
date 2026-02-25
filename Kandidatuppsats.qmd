@@ -6,6 +6,8 @@ editor: visual
 
 ## Kandidatuppsats
 
+# Om vi vill arbeta med både plasma-biomarkörer, diagnos och amyloid-status
+
 ```{r}
 # Skapa en mapp för att packa upp
 outdir <- "ADNIMERGE2_unpacked"
@@ -108,6 +110,83 @@ plasma_cols <- colnames(merged)[grepl("pT|Aβ|NfL|GFAP", colnames(merged))]
 n_complete <- merged %>%
   filter(
     !is.na(amyloid_status),
+    !is.na(diagnosis),
+    rowSums(!is.na(select(., all_of(plasma_cols)))) > 0
+  ) %>%
+  nrow()
+
+n_complete
+```
+
+# Om vi vill arbeta med bara plasma-biomarkörer och diagnos 
+
+```{r}
+# Skapa en mapp för att packa upp
+outdir <- "ADNIMERGE2_unpacked"
+dir.create(outdir, showWarnings = FALSE)
+
+# Packa upp tar.gz-filen
+untar("ADNIMERGE2.tar.gz", exdir = outdir)
+
+# Plasma-biomarkörer
+plasma_file <- normalizePath(file.path(outdir, "ADNIMERGE2/data/UPENN_PLASMA_FUJIREBIO_QUANTERIX.rda"))
+load(plasma_file)
+plasma_data <- UPENN_PLASMA_FUJIREBIO_QUANTERIX
+
+# Diagnos
+diagnosis_file <- normalizePath(file.path(outdir, "ADNIMERGE2/data/DXSUM.rda"))
+load(diagnosis_file)
+diagnosis_data <- DXSUM
+
+# Kontrollera antal rader
+cat("Plasma-data rader:", nrow(plasma_data), "\n")
+cat("Diagnos-data rader:", nrow(diagnosis_data), "\n")
+cat("Plasma-data unika RID:", length(unique(plasma_data$RID)), "\n")
+cat("Diagnos-data unika RID:", length(unique(diagnosis_data$RID)), "\n")
+
+library(dplyr)
+
+# Filtrera baseline i varje dataset
+plasma_bl <- plasma_data %>% filter(VISCODE %in% c("bl", "4_bl"))
+diagnosis_bl <- diagnosis_data %>% filter(VISCODE %in% c("bl", "4_bl"))
+
+# Merge datasets (bara plasma och diagnos)
+merged <- plasma_bl %>%
+  inner_join(diagnosis_bl, by = c("RID", "VISCODE"))
+
+# Skapa diagnosis
+if("DX" %in% colnames(merged)){
+  merged <- merged %>%
+    mutate(diagnosis = case_when(
+      DX == "CN" ~ "CN",
+      DX == "MCI" ~ "MCI",
+      DX == "AD" ~ "AD",
+      TRUE ~ NA_character_
+    ))
+} else if("DIAGNOSIS" %in% colnames(merged)){
+  merged <- merged %>%
+    mutate(diagnosis = case_when(
+      DIAGNOSIS == "CN" ~ "CN",
+      DIAGNOSIS == "MCI" ~ "MCI",
+      DIAGNOSIS == "AD" ~ "AD",
+      TRUE ~ NA_character_
+    ))
+} else {
+  warning("Ingen diagnos-kolumn hittades.")
+  merged$diagnosis <- NA
+}
+
+# Kontrollera resultat
+cat("Antal rader i merged dataset:", nrow(merged), "\n")
+cat("Antal unika deltagare:", length(unique(merged$RID)), "\n")
+table(merged$diagnosis, useNA = "ifany")
+
+# Identifiera kolumner som är plasma-biomarkörer
+plasma_cols <- colnames(merged)[grepl("pT|Aβ|NfL|GFAP", colnames(merged))]
+
+# Räkna antal rader med diagnos och minst en plasma-biomarkör
+n_complete <- merged %>%
+  filter(
     !is.na(diagnosis),
     rowSums(!is.na(select(., all_of(plasma_cols)))) > 0
   ) %>%
